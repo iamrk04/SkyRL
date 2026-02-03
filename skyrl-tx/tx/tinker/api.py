@@ -1,4 +1,5 @@
 import fastapi
+import sqlalchemy
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel, Field, model_validator
@@ -51,8 +52,15 @@ async def lifespan(app: FastAPI):
     connect_args = {}
     if "sqlite" in db_url:
         connect_args["timeout"] = 30  # Wait up to 30 seconds for locks
+        connect_args["check_same_thread"] = False
 
     app.state.db_engine = create_async_engine(db_url, echo=False, connect_args=connect_args)
+
+    # Enable WAL mode for SQLite for better concurrent access
+    if "sqlite" in db_url:
+        async with app.state.db_engine.begin() as conn:
+            await conn.execute(sqlalchemy.text("PRAGMA journal_mode=WAL"))
+            await conn.execute(sqlalchemy.text("PRAGMA busy_timeout=30000"))
 
     async with app.state.db_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
