@@ -195,7 +195,13 @@ class TinkerEngine:
     ):
         """Initialize the engine with a database connection and base model."""
         self.config = config
-        self.db_engine = create_engine(config.database_url, echo=False)
+
+        # Configure connection args for SQLite to handle concurrent access better
+        connect_args = {}
+        if "sqlite" in config.database_url:
+            connect_args["timeout"] = 30  # Wait up to 30 seconds for locks
+
+        self.db_engine = create_engine(config.database_url, echo=False, connect_args=connect_args)
 
         # Initialize the backend (handles model state, computation, and adapter management)
         backend_class, backend_config_class = get_backend_classes(config.backend)
