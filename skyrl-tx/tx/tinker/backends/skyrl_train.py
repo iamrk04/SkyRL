@@ -4,6 +4,7 @@ Uses SkyRL-Train infrastructure for supervised training with cross-entropy loss.
 Currently supports a single model only.
 """
 
+import json
 import os
 import tarfile
 import tempfile
@@ -287,17 +288,49 @@ class SkyRLTrainBackend(AbstractBackend):
         logger.info(f"Loaded checkpoint for {model_id} from {checkpoint_path}")
 
     def save_sampler_checkpoint(self, output_path, model_id: str) -> None:
-        """Save sampler checkpoint as tar (model only, no optimizer)."""
+        """Save sampler checkpoint as tar.
+        
+        For LoRA models: Saves only the LoRA adapter in PEFT format (small, ~MB).
+        For full fine-tuning: Saves the full model in HuggingFace format (large, ~GB).
+        """
         self._validate_model_state(model_id)
 
-        # Create temp directory for HuggingFace export
-        with tempfile.TemporaryDirectory() as temp_dir:
-            hf_dir = os.path.join(temp_dir, "model")
+        # Check if this is a LoRA model
+        is_lora = self._model_metadata and self._model_metadata.lora_config and self._model_metadata.lora_config.rank > 0
 
-            # Save in HuggingFace format (model weights + tokenizer only)
-            self._dispatch.save_hf_model(model="policy", export_dir=hf_dir, tokenizer=self._tokenizer)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            if is_lora:
+                # LoRA: Save only the adapter (small, fast)
+                export_dir = os.path.join(temp_dir, "lora_adapter")
+                os.makedirs(export_dir, exist_ok=True)
+                self._save_lora_adapter_via_workers(export_dir)
+                logger.info(f"Saved LoRA adapter checkpoint for {model_id}")
+            else:
+                # Full fine-tuning: Save the full model (large, slow)
+                export_dir = os.path.join(temp_dir, "model")
+                self._dispatch.save_hf_model(model="policy", export_dir=export_dir, tokenizer=self._tokenizer)
+                logger.info(f"Saved full model checkpoint for {model_id}")
 
             # Create tar archive
-            self._create_tar_from_directory(hf_dir, output_path)
+            self._create_tar_from_directory(export_dir, output_path)
 
         logger.info(f"Saved sampler checkpoint for {model_id} to {output_path}")
+
+    def _save_lora_adapter_via_workers(self, output_dir: str) -> None:
+        """Save LoRA adapter in PEFT format by collecting params from workers.
+        
+        This collects LoRA parameters from the distributed FSDP model and saves them
+        in the standard PEFT format that vLLM can load.
+        """
+        # Run the LoRA collection on workers - rank 0 will save directly to output_dir
+        result = ray.get(
+            self._actor_group.async_run_ray_method(
+                "pass_through",
+                "_collect_and_return_lora_adapter",
+                output_dir=output_dir,
+            )
+        )
+        
+        # Check if save was successful (rank 0 returns True if saved)
+        if not result or result[0] is None:
+            raise RuntimeError("Failed to collect LoRA adapter data - model may not be a LoRA model")

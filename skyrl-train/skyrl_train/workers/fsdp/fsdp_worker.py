@@ -235,6 +235,53 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
         # NOTE (sumanthrh): self.model -> HFModelWrapper; self.model.model -> AutoModelForCausalLM
         self.model.model.config.pad_token_id = pad_token_id
 
+    def _collect_and_return_lora_adapter(self, output_dir: str = None):
+        """Collect LoRA adapter parameters and config for external saving.
+        
+        Returns the LoRA parameters and config on rank 0, None on other ranks.
+        This is used by tinker to save LoRA adapters for external inference engines.
+        
+        Args:
+            output_dir: Optional directory to save to directly. If None, returns the data.
+            
+        Returns:
+            Tuple of (lora_params dict, peft_config dict) on rank 0, None on other ranks.
+        """
+        from dataclasses import asdict
+        from skyrl_train.distributed.fsdp_utils import collect_lora_params
+        
+        # Check if this is a LoRA model
+        peft_model = getattr(self.model.model, "_fsdp_wrapped_module", self.model.model)
+        if not hasattr(peft_model, "peft_config"):
+            return None
+        
+        # Collect LoRA parameters (this handles FSDP gathering)
+        lora_params = collect_lora_params(module=self.model.model)
+        
+        if torch.distributed.get_rank() == 0:
+            # Build PEFT config
+            peft_config = asdict(peft_model.peft_config.get("default", {}))
+            peft_config["task_type"] = peft_config["task_type"].value
+            peft_config["peft_type"] = peft_config["peft_type"].value
+            peft_config["target_modules"] = list(peft_config["target_modules"])
+            
+            # If output_dir is provided, save directly
+            if output_dir is not None:
+                import os
+                import json
+                from safetensors.torch import save_file
+                
+                os.makedirs(output_dir, exist_ok=True)
+                save_file(lora_params, os.path.join(output_dir, "adapter_model.safetensors"))
+                with open(os.path.join(output_dir, "adapter_config.json"), "w") as f:
+                    json.dump(peft_config, f, ensure_ascii=False, indent=4)
+                return True
+            
+            return (lora_params, peft_config)
+        
+        torch.distributed.barrier()
+        return None
+
     def forward(
         self,
         data: TrainingInputBatch,
