@@ -82,6 +82,15 @@ class SkyRLTrainBackend(AbstractBackend):
         self._cfg = None
         self._tokenizer = AutoTokenizer.from_pretrained(self.base_model)
 
+        # Ensure pad_token_id is set (many models like Mistral don't have one by default)
+        if self._tokenizer.pad_token_id is None:
+            if self._tokenizer.eos_token_id is not None:
+                self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
+                logger.warning(f"pad_token_id not set, using eos_token_id ({self._tokenizer.eos_token_id}) as pad_token_id")
+            else:
+                self._tokenizer.pad_token_id = 0
+                logger.warning("pad_token_id and eos_token_id not set, using 0 as pad_token_id")
+
     def has_model(self, model_id: str) -> bool:
         return self._model_id == model_id
 
