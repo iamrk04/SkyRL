@@ -40,8 +40,9 @@ def download_and_unpack(source: AnyPath) -> Generator[Path, None, None]:
         tmp_path = Path(tmp)
 
         # Download and extract tar archive (handles both local and cloud storage)
+        # Use mode="r:*" to auto-detect compression format (gzip, bz2, xz, or uncompressed)
         with source.open("rb") as f:
-            with tarfile.open(fileobj=f, mode="r:gz") as tar:
+            with tarfile.open(fileobj=f, mode="r:*") as tar:
                 tar.extractall(tmp_path, filter="data")
 
         yield tmp_path
