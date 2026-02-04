@@ -69,7 +69,7 @@ skyrl_train = [
     # here since skyrl-train pins on python version 3.12,
     # hopefully in the future we can remove that.
     # skyrl-train[vllm] requires CUDA packages which are Linux-only.
-    "skyrl-train[vllm]; python_version == '3.12' and sys_platform == 'linux'",
+    "skyrl-train[vllm] @ git+https://github.com/iamrk04/SkyRL.git@rk/fix#subdirectory=skyrl-train; python_version == '3.12' and sys_platform == 'linux'",
 ]
 
 dev = [
