@@ -253,16 +253,38 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
         
         logger = logging.getLogger(__name__)
         
-        # Check if this is a LoRA model - need to unwrap FSDP to find peft_config
+        # Check if this is a LoRA model - need to find peft_config
         # self.model is HFModelWrapper, self.model.model is the FSDP-wrapped model
         fsdp_model = self.model.model
-        peft_model = getattr(fsdp_model, "_fsdp_wrapped_module", fsdp_model)
+        
+        # Try multiple ways to find peft_config since FSDP2 wraps differently
+        peft_model = fsdp_model
+        peft_config_found = False
+        
+        # Method 1: Direct attribute on FSDP model (FSDP2 preserves attributes)
+        if hasattr(fsdp_model, "peft_config"):
+            peft_model = fsdp_model
+            peft_config_found = True
+            logger.info("[LoRA collect] Found peft_config directly on FSDP model")
+        
+        # Method 2: Check _fsdp_wrapped_module (FSDP1 style)
+        elif hasattr(fsdp_model, "_fsdp_wrapped_module"):
+            wrapped = fsdp_model._fsdp_wrapped_module
+            if hasattr(wrapped, "peft_config"):
+                peft_model = wrapped
+                peft_config_found = True
+                logger.info("[LoRA collect] Found peft_config on _fsdp_wrapped_module")
+        
+        # Method 3: Check base_model.model (PEFT structure)
+        if not peft_config_found and hasattr(fsdp_model, "base_model"):
+            if hasattr(fsdp_model.base_model, "model"):
+                logger.info(f"[LoRA collect] Found base_model.model: {type(fsdp_model.base_model.model)}")
         
         logger.info(f"[LoRA collect] fsdp_model type: {type(fsdp_model)}")
-        logger.info(f"[LoRA collect] peft_model type: {type(peft_model)}")
-        logger.info(f"[LoRA collect] has peft_config: {hasattr(peft_model, 'peft_config')}")
+        logger.info(f"[LoRA collect] fsdp_model attributes: {[a for a in dir(fsdp_model) if not a.startswith('_')][:20]}")
+        logger.info(f"[LoRA collect] peft_config_found: {peft_config_found}")
         
-        if not hasattr(peft_model, "peft_config"):
+        if not peft_config_found:
             logger.warning("[LoRA collect] Model does not have peft_config - not a LoRA model")
             return None
         
