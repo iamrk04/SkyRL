@@ -247,20 +247,35 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
         Returns:
             Tuple of (lora_params dict, peft_config dict) on rank 0, None on other ranks.
         """
+        import logging
         from dataclasses import asdict
         from skyrl_train.distributed.fsdp_utils import collect_lora_params
         
-        # Check if this is a LoRA model
-        peft_model = getattr(self.model.model, "_fsdp_wrapped_module", self.model.model)
+        logger = logging.getLogger(__name__)
+        
+        # Check if this is a LoRA model - need to unwrap FSDP to find peft_config
+        # self.model is HFModelWrapper, self.model.model is the FSDP-wrapped model
+        fsdp_model = self.model.model
+        peft_model = getattr(fsdp_model, "_fsdp_wrapped_module", fsdp_model)
+        
+        logger.info(f"[LoRA collect] fsdp_model type: {type(fsdp_model)}")
+        logger.info(f"[LoRA collect] peft_model type: {type(peft_model)}")
+        logger.info(f"[LoRA collect] has peft_config: {hasattr(peft_model, 'peft_config')}")
+        
         if not hasattr(peft_model, "peft_config"):
+            logger.warning("[LoRA collect] Model does not have peft_config - not a LoRA model")
             return None
         
-        # Collect LoRA parameters (this handles FSDP gathering)
-        lora_params = collect_lora_params(module=self.model.model)
+        logger.info(f"[LoRA collect] peft_config keys: {peft_model.peft_config.keys() if peft_model.peft_config else 'None'}")
         
+        # Collect LoRA parameters (this handles FSDP gathering)
+        lora_params = collect_lora_params(module=fsdp_model)
+        logger.info(f"[LoRA collect] Collected {len(lora_params)} LoRA parameters")
+        
+        result = None
         if torch.distributed.get_rank() == 0:
             # Build PEFT config
-            peft_config = asdict(peft_model.peft_config.get("default", {}))
+            peft_config = asdict(peft_model.peft_config["default"])
             peft_config["task_type"] = peft_config["task_type"].value
             peft_config["peft_type"] = peft_config["peft_type"].value
             peft_config["target_modules"] = list(peft_config["target_modules"])
@@ -275,12 +290,13 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
                 save_file(lora_params, os.path.join(output_dir, "adapter_model.safetensors"))
                 with open(os.path.join(output_dir, "adapter_config.json"), "w") as f:
                     json.dump(peft_config, f, ensure_ascii=False, indent=4)
-                return True
-            
-            return (lora_params, peft_config)
+                logger.info(f"[LoRA collect] Saved adapter to {output_dir}")
+                result = True
+            else:
+                result = (lora_params, peft_config)
         
         torch.distributed.barrier()
-        return None
+        return result
 
     def forward(
         self,
