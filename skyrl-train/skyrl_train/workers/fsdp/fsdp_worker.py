@@ -235,94 +235,45 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
         # NOTE (sumanthrh): self.model -> HFModelWrapper; self.model.model -> AutoModelForCausalLM
         self.model.model.config.pad_token_id = pad_token_id
 
-    def _collect_and_return_lora_adapter(self, output_dir: str = None):
-        """Collect LoRA adapter parameters and config for external saving.
+    def _save_lora_weights(self, output_dir: str):
+        """Save LoRA weights to output_dir (rank 0 only).
         
-        Returns the LoRA parameters and config on rank 0, None on other ranks.
-        This is used by tinker to save LoRA adapters for external inference engines.
+        This method collects LoRA parameters from the FSDP-wrapped PEFT model
+        and saves them as adapter_model.safetensors. The config file is created
+        by the caller (tinker backend) which has access to all the metadata.
         
         Args:
-            output_dir: Optional directory to save to directly. If None, returns the data.
+            output_dir: Directory to save the weights to.
             
         Returns:
-            Tuple of (lora_params dict, peft_config dict) on rank 0, None on other ranks.
+            True on rank 0 if successful, None on other ranks or if no LoRA params.
         """
         import logging
-        from dataclasses import asdict
+        import os
+        from safetensors.torch import save_file
         from skyrl_train.distributed.fsdp_utils import collect_lora_params
         
         logger = logging.getLogger(__name__)
         
-        # Check if this is a LoRA model - need to find peft_config
         # self.model is HFModelWrapper, self.model.model is the FSDP-wrapped model
         fsdp_model = self.model.model
         
-        # Try multiple ways to find peft_config since FSDP2 wraps differently
-        peft_model = None
-        peft_config_dict = None
+        # Collect LoRA parameters (handles FSDP gathering internally)
+        lora_params = collect_lora_params(module=fsdp_model)
         
-        # Method 1: Direct attribute on FSDP model (FSDP2 preserves attributes)
-        if hasattr(fsdp_model, "peft_config"):
-            peft_model = fsdp_model
-            peft_config_dict = fsdp_model.peft_config
-            logger.info("[LoRA collect] Found peft_config directly on FSDP model")
-        
-        # Method 2: Check base_model.peft_config (PEFT structure)
-        elif hasattr(fsdp_model, "base_model") and hasattr(fsdp_model.base_model, "peft_config"):
-            peft_model = fsdp_model.base_model
-            peft_config_dict = fsdp_model.base_model.peft_config
-            logger.info("[LoRA collect] Found peft_config on base_model")
-        
-        # Method 3: Check _fsdp_wrapped_module (FSDP1 style)
-        elif hasattr(fsdp_model, "_fsdp_wrapped_module"):
-            wrapped = fsdp_model._fsdp_wrapped_module
-            if hasattr(wrapped, "peft_config"):
-                peft_model = wrapped
-                peft_config_dict = wrapped.peft_config
-                logger.info("[LoRA collect] Found peft_config on _fsdp_wrapped_module")
-        
-        # Method 4: Check if active_adapters exists (indicates PEFT but config elsewhere)
-        if peft_config_dict is None and hasattr(fsdp_model, "active_adapters"):
-            logger.info(f"[LoRA collect] active_adapters: {fsdp_model.active_adapters}")
-            # Try to get config from get_peft_model_state_dict which knows how to find it
-            if hasattr(fsdp_model, "get_model_status"):
-                logger.info(f"[LoRA collect] model_status: {fsdp_model.get_model_status()}")
-        
-        logger.info(f"[LoRA collect] fsdp_model type: {type(fsdp_model)}")
-        logger.info(f"[LoRA collect] peft_config_dict: {peft_config_dict}")
-        
-        if peft_config_dict is None:
-            logger.warning("[LoRA collect] Could not find peft_config - not a LoRA model or config inaccessible")
+        if not lora_params:
+            logger.warning("[LoRA save] No LoRA parameters collected")
             return None
         
-        logger.info(f"[LoRA collect] peft_config keys: {peft_config_dict.keys()}")
-        
-        # Collect LoRA parameters (this handles FSDP gathering)
-        lora_params = collect_lora_params(module=fsdp_model)
-        logger.info(f"[LoRA collect] Collected {len(lora_params)} LoRA parameters")
+        logger.info(f"[LoRA save] Collected {len(lora_params)} LoRA parameter tensors")
         
         result = None
         if torch.distributed.get_rank() == 0:
-            # Build PEFT config
-            peft_config = asdict(peft_config_dict["default"])
-            peft_config["task_type"] = peft_config["task_type"].value
-            peft_config["peft_type"] = peft_config["peft_type"].value
-            peft_config["target_modules"] = list(peft_config["target_modules"])
-            
-            # If output_dir is provided, save directly
-            if output_dir is not None:
-                import os
-                import json
-                from safetensors.torch import save_file
-                
-                os.makedirs(output_dir, exist_ok=True)
-                save_file(lora_params, os.path.join(output_dir, "adapter_model.safetensors"))
-                with open(os.path.join(output_dir, "adapter_config.json"), "w") as f:
-                    json.dump(peft_config, f, ensure_ascii=False, indent=4)
-                logger.info(f"[LoRA collect] Saved adapter to {output_dir}")
-                result = True
-            else:
-                result = (lora_params, peft_config)
+            os.makedirs(output_dir, exist_ok=True)
+            weights_path = os.path.join(output_dir, "adapter_model.safetensors")
+            save_file(lora_params, weights_path)
+            logger.info(f"[LoRA save] Saved weights to {weights_path}")
+            result = True
         
         torch.distributed.barrier()
         return result

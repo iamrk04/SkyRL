@@ -58,6 +58,12 @@ def _build_config(base_model: str, config: SkyRLTrainBackendConfig, lora_config:
     cfg.trainer.policy.optimizer_config.scheduler = "constant"
     cfg.trainer.policy.optimizer_config.num_warmup_steps = 0
 
+    # Apply LoRA config if provided
+    if lora_config is not None and lora_config.rank > 0:
+        cfg.trainer.policy.model.lora.rank = lora_config.rank
+        cfg.trainer.policy.model.lora.alpha = int(lora_config.alpha) if lora_config.alpha else 32
+        logger.info(f"LoRA config applied: rank={lora_config.rank}, alpha={cfg.trainer.policy.model.lora.alpha}")
+
     return cfg
 
 
@@ -293,17 +299,31 @@ class SkyRLTrainBackend(AbstractBackend):
         For LoRA models: Saves only the LoRA adapter in PEFT format (small, ~MB).
         For full fine-tuning: Saves the full model in HuggingFace format (large, ~GB).
         """
+        import peft
+        
         self._validate_model_state(model_id)
 
         # Check if this is a LoRA model
-        is_lora = self._model_metadata and self._model_metadata.lora_config and self._model_metadata.lora_config.rank > 0
+        lora_config = self._model_metadata.lora_config if self._model_metadata else None
+        is_lora = lora_config and lora_config.rank > 0
 
         with tempfile.TemporaryDirectory() as temp_dir:
             if is_lora:
-                # LoRA: Save only the adapter (small, fast)
+                # LoRA: Save only the adapter in PEFT format
                 export_dir = os.path.join(temp_dir, "lora_adapter")
                 os.makedirs(export_dir, exist_ok=True)
-                self._save_lora_adapter_via_workers(export_dir)
+                
+                # Collect LoRA params from workers (rank 0 saves the weights)
+                self._save_lora_weights_via_workers(export_dir)
+                
+                # Create PEFT config (like JAX backend does) - we have all the info here
+                peft_config = peft.LoraConfig(
+                    base_model_name_or_path=self.base_model,
+                    r=lora_config.rank,
+                    lora_alpha=int(lora_config.alpha) if lora_config.alpha else 32,
+                )
+                peft_config.save_pretrained(export_dir)
+                
                 logger.info(f"Saved LoRA adapter checkpoint for {model_id}")
             else:
                 # Full fine-tuning: Save the full model (large, slow)
@@ -316,21 +336,20 @@ class SkyRLTrainBackend(AbstractBackend):
 
         logger.info(f"Saved sampler checkpoint for {model_id} to {output_path}")
 
-    def _save_lora_adapter_via_workers(self, output_dir: str) -> None:
-        """Save LoRA adapter in PEFT format by collecting params from workers.
+    def _save_lora_weights_via_workers(self, output_dir: str) -> None:
+        """Collect and save LoRA weights from distributed workers.
         
-        This collects LoRA parameters from the distributed FSDP model and saves them
-        in the standard PEFT format that vLLM can load.
+        Uses skyrl-train's collect_lora_params to gather params from FSDP model.
+        Rank 0 worker saves the weights to output_dir.
         """
-        # Run the LoRA collection on workers - rank 0 will save directly to output_dir
         result = ray.get(
             self._actor_group.async_run_ray_method(
                 "pass_through",
-                "_collect_and_return_lora_adapter",
+                "_save_lora_weights",
                 output_dir=output_dir,
             )
         )
         
         # Check if save was successful (rank 0 returns True if saved)
         if not result or result[0] is None:
-            raise RuntimeError("Failed to collect LoRA adapter data - model may not be a LoRA model")
+            raise RuntimeError("Failed to save LoRA weights - model may not be a LoRA model")
