@@ -258,37 +258,44 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
         fsdp_model = self.model.model
         
         # Try multiple ways to find peft_config since FSDP2 wraps differently
-        peft_model = fsdp_model
-        peft_config_found = False
+        peft_model = None
+        peft_config_dict = None
         
         # Method 1: Direct attribute on FSDP model (FSDP2 preserves attributes)
         if hasattr(fsdp_model, "peft_config"):
             peft_model = fsdp_model
-            peft_config_found = True
+            peft_config_dict = fsdp_model.peft_config
             logger.info("[LoRA collect] Found peft_config directly on FSDP model")
         
-        # Method 2: Check _fsdp_wrapped_module (FSDP1 style)
+        # Method 2: Check base_model.peft_config (PEFT structure)
+        elif hasattr(fsdp_model, "base_model") and hasattr(fsdp_model.base_model, "peft_config"):
+            peft_model = fsdp_model.base_model
+            peft_config_dict = fsdp_model.base_model.peft_config
+            logger.info("[LoRA collect] Found peft_config on base_model")
+        
+        # Method 3: Check _fsdp_wrapped_module (FSDP1 style)
         elif hasattr(fsdp_model, "_fsdp_wrapped_module"):
             wrapped = fsdp_model._fsdp_wrapped_module
             if hasattr(wrapped, "peft_config"):
                 peft_model = wrapped
-                peft_config_found = True
+                peft_config_dict = wrapped.peft_config
                 logger.info("[LoRA collect] Found peft_config on _fsdp_wrapped_module")
         
-        # Method 3: Check base_model.model (PEFT structure)
-        if not peft_config_found and hasattr(fsdp_model, "base_model"):
-            if hasattr(fsdp_model.base_model, "model"):
-                logger.info(f"[LoRA collect] Found base_model.model: {type(fsdp_model.base_model.model)}")
+        # Method 4: Check if active_adapters exists (indicates PEFT but config elsewhere)
+        if peft_config_dict is None and hasattr(fsdp_model, "active_adapters"):
+            logger.info(f"[LoRA collect] active_adapters: {fsdp_model.active_adapters}")
+            # Try to get config from get_peft_model_state_dict which knows how to find it
+            if hasattr(fsdp_model, "get_model_status"):
+                logger.info(f"[LoRA collect] model_status: {fsdp_model.get_model_status()}")
         
         logger.info(f"[LoRA collect] fsdp_model type: {type(fsdp_model)}")
-        logger.info(f"[LoRA collect] fsdp_model attributes: {[a for a in dir(fsdp_model) if not a.startswith('_')][:20]}")
-        logger.info(f"[LoRA collect] peft_config_found: {peft_config_found}")
+        logger.info(f"[LoRA collect] peft_config_dict: {peft_config_dict}")
         
-        if not peft_config_found:
-            logger.warning("[LoRA collect] Model does not have peft_config - not a LoRA model")
+        if peft_config_dict is None:
+            logger.warning("[LoRA collect] Could not find peft_config - not a LoRA model or config inaccessible")
             return None
         
-        logger.info(f"[LoRA collect] peft_config keys: {peft_model.peft_config.keys() if peft_model.peft_config else 'None'}")
+        logger.info(f"[LoRA collect] peft_config keys: {peft_config_dict.keys()}")
         
         # Collect LoRA parameters (this handles FSDP gathering)
         lora_params = collect_lora_params(module=fsdp_model)
@@ -297,7 +304,7 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
         result = None
         if torch.distributed.get_rank() == 0:
             # Build PEFT config
-            peft_config = asdict(peft_model.peft_config["default"])
+            peft_config = asdict(peft_config_dict["default"])
             peft_config["task_type"] = peft_config["task_type"].value
             peft_config["peft_type"] = peft_config["peft_type"].value
             peft_config["target_modules"] = list(peft_config["target_modules"])
