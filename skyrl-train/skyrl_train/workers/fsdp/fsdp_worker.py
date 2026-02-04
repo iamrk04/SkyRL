@@ -1,4 +1,5 @@
 from skyrl_train.utils.trainer_utils import get_rope_scaling_config, get_rope_theta_config
+import os
 import ray
 import torch
 import torch.distributed
@@ -6,6 +7,8 @@ from transformers import AutoConfig
 from torch.distributed.fsdp.api import ShardedStateDictConfig, StateDictType
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 import io
+from loguru import logger
+from safetensors.torch import save_file
 
 try:
     # for torch 2.5+
@@ -238,28 +241,11 @@ class FSDPPolicyWorkerBase(PolicyWorkerBase):
     def _save_lora_weights(self, output_dir: str):
         """Save LoRA weights to output_dir (rank 0 only).
         
-        This method collects LoRA parameters from the FSDP-wrapped PEFT model
-        and saves them as adapter_model.safetensors. The config file is created
-        by the caller (tinker backend) which has access to all the metadata.
-        
-        Args:
-            output_dir: Directory to save the weights to.
-            
-        Returns:
-            True on rank 0 if successful, None on other ranks or if no LoRA params.
+        Collects LoRA parameters from FSDP-wrapped PEFT model and saves as adapter_model.safetensors.
         """
-        import logging
-        import os
-        from safetensors.torch import save_file
         from skyrl_train.distributed.fsdp_utils import collect_lora_params
         
-        logger = logging.getLogger(__name__)
-        
-        # self.model is HFModelWrapper, self.model.model is the FSDP-wrapped model
-        fsdp_model = self.model.model
-        
-        # Collect LoRA parameters (handles FSDP gathering internally)
-        lora_params = collect_lora_params(module=fsdp_model)
+        lora_params = collect_lora_params(module=self.model.model)
         
         if not lora_params:
             logger.warning("[LoRA save] No LoRA parameters collected")

@@ -4,12 +4,13 @@ Uses SkyRL-Train infrastructure for supervised training with cross-entropy loss.
 Currently supports a single model only.
 """
 
-import json
 import os
 import tarfile
 import tempfile
+from pathlib import Path
 from typing import Any
 
+import peft
 import torch
 from pydantic import BaseModel
 from transformers import AutoTokenizer
@@ -17,6 +18,7 @@ from transformers import AutoTokenizer
 from tx.tinker import types
 from tx.tinker.backends.backend import AbstractBackend
 from tx.utils.log import logger
+from tx.utils.storage import pack_and_upload
 
 try:  # Optional dependency: keep other backends importable without ray/skyrl-train.
     import ray
@@ -91,12 +93,8 @@ class SkyRLTrainBackend(AbstractBackend):
 
         # Ensure pad_token_id is set (many models like Mistral don't have one by default)
         if self._tokenizer.pad_token_id is None:
-            if self._tokenizer.eos_token_id is not None:
-                self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
-                logger.warning(f"pad_token_id not set, using eos_token_id ({self._tokenizer.eos_token_id}) as pad_token_id")
-            else:
-                self._tokenizer.pad_token_id = 0
-                logger.warning("pad_token_id and eos_token_id not set, using 0 as pad_token_id")
+            self._tokenizer.pad_token_id = self._tokenizer.eos_token_id or 0
+            logger.warning(f"pad_token_id not set, using {self._tokenizer.pad_token_id} as pad_token_id")
 
     def has_model(self, model_id: str) -> bool:
         return self._model_id == model_id
@@ -294,45 +292,29 @@ class SkyRLTrainBackend(AbstractBackend):
         logger.info(f"Loaded checkpoint for {model_id} from {checkpoint_path}")
 
     def save_sampler_checkpoint(self, output_path, model_id: str) -> None:
-        """Save sampler checkpoint as tar.
-        
-        For LoRA models: Saves only the LoRA adapter in PEFT format (small, ~MB).
-        For full fine-tuning: Saves the full model in HuggingFace format (large, ~GB).
-        """
-        import peft
-        
+        """Save sampler checkpoint as tar.gz using pack_and_upload (same as JAX backend)."""
         self._validate_model_state(model_id)
 
-        # Check if this is a LoRA model
         lora_config = self._model_metadata.lora_config if self._model_metadata else None
         is_lora = lora_config and lora_config.rank > 0
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with pack_and_upload(Path(output_path)) as temp_dir:
             if is_lora:
-                # LoRA: Save only the adapter in PEFT format
-                export_dir = os.path.join(temp_dir, "lora_adapter")
-                os.makedirs(export_dir, exist_ok=True)
+                # Save LoRA weights via distributed workers
+                self._save_lora_weights_via_workers(str(temp_dir))
                 
-                # Collect LoRA params from workers (rank 0 saves the weights)
-                self._save_lora_weights_via_workers(export_dir)
-                
-                # Create PEFT config (like JAX backend does) - we have all the info here
+                # Create PEFT config (same as JAX backend)
                 peft_config = peft.LoraConfig(
                     base_model_name_or_path=self.base_model,
                     r=lora_config.rank,
                     lora_alpha=int(lora_config.alpha) if lora_config.alpha else 32,
                 )
-                peft_config.save_pretrained(export_dir)
-                
+                peft_config.save_pretrained(temp_dir)
                 logger.info(f"Saved LoRA adapter checkpoint for {model_id}")
             else:
-                # Full fine-tuning: Save the full model (large, slow)
-                export_dir = os.path.join(temp_dir, "model")
-                self._dispatch.save_hf_model(model="policy", export_dir=export_dir, tokenizer=self._tokenizer)
+                # Full fine-tuning: Save the full model
+                self._dispatch.save_hf_model(model="policy", export_dir=str(temp_dir), tokenizer=self._tokenizer)
                 logger.info(f"Saved full model checkpoint for {model_id}")
-
-            # Create tar archive
-            self._create_tar_from_directory(export_dir, output_path)
 
         logger.info(f"Saved sampler checkpoint for {model_id} to {output_path}")
 
