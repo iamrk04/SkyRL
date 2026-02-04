@@ -295,7 +295,7 @@ class SkyRLTrainBackend(AbstractBackend):
             hf_dir = os.path.join(temp_dir, "model")
 
             # Save in HuggingFace format (model weights + tokenizer only)
-            self._dispatch.save_hf_model(model="policy", hf_model_dir=hf_dir, tokenizer=self._tokenizer)
+            self._dispatch.save_hf_model(model="policy", export_dir=hf_dir, tokenizer=self._tokenizer)
 
             # Create tar archive
             self._create_tar_from_directory(hf_dir, output_path)
