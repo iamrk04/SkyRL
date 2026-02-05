@@ -1,7 +1,6 @@
 """Background engine for processing training requests."""
 
 import argparse
-import sqlalchemy
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -201,16 +200,8 @@ class TinkerEngine:
         connect_args = {}
         if "sqlite" in config.database_url:
             connect_args["timeout"] = 30  # Wait up to 30 seconds for locks
-            connect_args["check_same_thread"] = False
 
         self.db_engine = create_engine(config.database_url, echo=False, connect_args=connect_args)
-
-        # Enable WAL mode for SQLite for better concurrent access
-        if "sqlite" in config.database_url:
-            with self.db_engine.connect() as conn:
-                conn.execute(sqlalchemy.text("PRAGMA journal_mode=WAL"))
-                conn.execute(sqlalchemy.text("PRAGMA busy_timeout=30000"))
-                conn.commit()
 
         # Initialize the backend (handles model state, computation, and adapter management)
         backend_class, backend_config_class = get_backend_classes(config.backend)
