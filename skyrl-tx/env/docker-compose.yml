@@ -10,6 +10,7 @@ services:
   # vLLM inference server (uses GPUs 4-7)
   vllm:
     image: vllm/vllm-openai:v0.8.5
+    user: "0:0"  # Run as root to read LoRA adapters created by skyrl-tx
     deploy:
       resources:
         reservations:
@@ -59,11 +60,11 @@ services:
       - RAY_TMPDIR=/data/ray
       - HF_HOME=/data/huggingface
     command: >
-      bash -c "umask 000 && uv run --extra gpu --extra tinker --extra skyrl_train
+      uv run --extra gpu --extra tinker --extra skyrl_train
       -m tx.tinker.api
       --base-model ${BASE_MODEL:-Qwen/Qwen3-0.6B}
       --backend skyrl_train
       --database-url sqlite:////data/tinker_db/tinker.db
       --checkpoints-base /data/checkpoints
       --external-inference-url http://vllm:8000
-      --external-inference-lora-base /data/lora_models"
+      --external-inference-lora-base /data/lora_models
