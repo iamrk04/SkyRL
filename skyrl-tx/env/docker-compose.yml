@@ -1,0 +1,56 @@
+# SkyRL-TX Docker Compose
+# Runs SkyRL-TX (training) + vLLM (inference) together
+
+services:
+  # vLLM inference server (uses GPUs 4-7)
+  vllm:
+    image: vllm/vllm-openai:v0.8.5
+    runtime: nvidia
+    ports:
+      - "7999:8000"
+    volumes:
+      - ${DATA_DIR:-./data}/lora_models:/lora_models
+      - ${DATA_DIR:-./data}/huggingface:/root/.cache/huggingface
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=4,5,6,7
+      - VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
+      - VLLM_PLUGINS=lora_filesystem_resolver
+      - VLLM_LORA_RESOLVER_CACHE_DIR=/lora_models
+    command: >
+      --model ${BASE_MODEL:-mistralai/Mistral-7B-v0.1}
+      --tensor-parallel-size 4
+      --enable-lora
+      --max-lora-rank ${MAX_LORA_RANK:-32}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # SkyRL-TX training server (uses GPUs 0-3)
+  skyrl-tx:
+    build:
+      context: ../..
+      dockerfile: skyrl-tx/env/Dockerfile
+    runtime: nvidia
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0,1,2,3
+      - RAY_TMPDIR=/data/ray
+      - HF_HOME=/data/huggingface
+    command: >
+      uv run --extra gpu --extra tinker --extra skyrl_train
+      -m tx.tinker.api
+      --base-model ${BASE_MODEL:-mistralai/Mistral-7B-v0.1}
+      --backend skyrl_train
+      --database-url sqlite:////data/tinker_db/tinker.db
+      --checkpoints-base /data/checkpoints
+      --external-inference-url http://vllm:8000
+      --external-inference-lora-base /data/lora_models
+    depends_on:
+      vllm:
+        condition: service_healthy
