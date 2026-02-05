@@ -66,6 +66,3 @@ services:
       --checkpoints-base /data/checkpoints
       --external-inference-url http://vllm:8000
       --external-inference-lora-base /data/lora_models
-    depends_on:
-      vllm:
-        condition: service_healthy

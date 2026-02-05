@@ -251,11 +251,14 @@ fi
 if [ ! -d "$DATA_DIR" ]; then
     log_info "Creating data directory: $DATA_DIR"
     sudo mkdir -p "$DATA_DIR"
-    sudo chown $(whoami):$(whoami) "$DATA_DIR"
 fi
 
-# Create subdirectories
-mkdir -p "$DATA_DIR"/{checkpoints,lora_models,tinker_db,huggingface,ray,tmp}
+# Create subdirectories and set permissions (777 so container user can write)
+mkdir -p "$DATA_DIR"/{checkpoints,lora_models,tinker_db,huggingface,ray,tmp,uv_cache} 2>/dev/null || \
+sudo mkdir -p "$DATA_DIR"/{checkpoints,lora_models,tinker_db,huggingface,ray,tmp,uv_cache}
+
+# Make writable by anyone (container runs as different user)
+sudo chmod -R 777 "$DATA_DIR"
 log_info "Data directories ready ✓"
 
 # ============================================
