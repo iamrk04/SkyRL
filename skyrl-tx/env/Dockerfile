@@ -18,8 +18,9 @@ RUN git clone -b rk/fix https://github.com/iamrk04/SkyRL.git .
 WORKDIR /app/skyrl-tx
 RUN uv sync --extra gpu --extra tinker --extra skyrl_train
 
-# Create directories for runtime data
-RUN mkdir -p /data/{checkpoints,lora_models,tinker_db,ray,huggingface,tmp}
+# Create directories for runtime data (needs sudo in ray image)
+RUN sudo mkdir -p /data/{checkpoints,lora_models,tinker_db,ray,huggingface,tmp} && \
+    sudo chown -R ray:ray /data
 
 # Environment variables
 ENV RAY_TMPDIR=/data/ray \
