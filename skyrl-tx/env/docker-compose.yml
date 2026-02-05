@@ -45,6 +45,7 @@ services:
       context: ../..
       dockerfile: skyrl-tx/env/Dockerfile
     user: "0:0"  # Run as root to avoid permission issues with mounted volumes
+    shm_size: '64gb'  # Ray needs large shared memory for object store
     deploy:
       resources:
         reservations:
