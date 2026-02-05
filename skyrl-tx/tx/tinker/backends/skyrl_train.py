@@ -100,11 +100,6 @@ class SkyRLTrainBackend(AbstractBackend):
         return self._model_id == model_id
 
     def create_model(self, model_id: str, lora_config: types.LoraConfig) -> None:
-        # Idempotent: if this exact model already exists, return success (handles retries)
-        if self._model_id == model_id:
-            logger.info(f"Model '{model_id}' already exists, returning success (idempotent)")
-            return
-
         if self._model_id is not None:
             raise ValueError(f"Model '{self._model_id}' already exists. Only one model supported.")
 
