@@ -20,7 +20,7 @@ RUN uv sync --extra gpu --extra tinker --extra skyrl_train
 
 # Create directories for runtime data (needs sudo in ray image)
 RUN sudo mkdir -p /data/{checkpoints,lora_models,tinker_db,ray,huggingface,tmp} && \
-    sudo chown -R ray:ray /data
+    sudo chown -R $(whoami) /data
 
 # Environment variables
 ENV RAY_TMPDIR=/data/ray \
