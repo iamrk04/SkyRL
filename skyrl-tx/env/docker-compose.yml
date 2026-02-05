@@ -1,23 +1,33 @@
 # SkyRL-TX Docker Compose
 # Runs SkyRL-TX (training) + vLLM (inference) together
+#
+# Usage:
+#   ./start.sh                           # Uses defaults
+#   ./start.sh Qwen/Qwen3-0.6B           # Custom model
+#   ./start.sh mistralai/Mistral-7B-v0.1 /mnt/data  # Custom model + data dir
 
 services:
   # vLLM inference server (uses GPUs 4-7)
   vllm:
     image: vllm/vllm-openai:v0.8.5
-    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['4', '5', '6', '7']
+              capabilities: [gpu]
     ports:
       - "7999:8000"
     volumes:
       - ${DATA_DIR:-./data}/lora_models:/lora_models
       - ${DATA_DIR:-./data}/huggingface:/root/.cache/huggingface
     environment:
-      - NVIDIA_VISIBLE_DEVICES=4,5,6,7
       - VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
       - VLLM_PLUGINS=lora_filesystem_resolver
       - VLLM_LORA_RESOLVER_CACHE_DIR=/lora_models
     command: >
-      --model ${BASE_MODEL:-mistralai/Mistral-7B-v0.1}
+      --model ${BASE_MODEL:-Qwen/Qwen3-0.6B}
       --tensor-parallel-size 4
       --enable-lora
       --max-lora-rank ${MAX_LORA_RANK:-32}
@@ -25,27 +35,32 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 120s
+      retries: 10
+      start_period: 180s
 
   # SkyRL-TX training server (uses GPUs 0-3)
   skyrl-tx:
     build:
       context: ../..
       dockerfile: skyrl-tx/env/Dockerfile
-    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0', '1', '2', '3']
+              capabilities: [gpu]
     ports:
       - "8000:8000"
     volumes:
       - ${DATA_DIR:-./data}:/data
     environment:
-      - NVIDIA_VISIBLE_DEVICES=0,1,2,3
       - RAY_TMPDIR=/data/ray
       - HF_HOME=/data/huggingface
     command: >
       uv run --extra gpu --extra tinker --extra skyrl_train
       -m tx.tinker.api
-      --base-model ${BASE_MODEL:-mistralai/Mistral-7B-v0.1}
+      --base-model ${BASE_MODEL:-Qwen/Qwen3-0.6B}
       --backend skyrl_train
       --database-url sqlite:////data/tinker_db/tinker.db
       --checkpoints-base /data/checkpoints

@@ -2,6 +2,38 @@
 
 Docker configuration for running SkyRL-TX with the SkyRL-Train backend.
 
+## Prerequisites
+
+### Docker Permissions
+
+Add yourself to the docker group to avoid using `sudo`:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker  # Apply without logout (or log out and back in)
+```
+
+### Data Directory Setup
+
+On Azure VMs, use the fast ephemeral NVMe storage:
+
+```bash
+# Check available storage
+df -h
+
+# Create data directory on NVMe (28TB, very fast, but wiped on VM restart)
+sudo mkdir -p /eph/nvme0/skyrl-data
+sudo chown $USER:$USER /eph/nvme0/skyrl-data
+
+# Create subdirectories
+mkdir -p /eph/nvme0/skyrl-data/{checkpoints,lora_models,tinker_db,huggingface,ray,tmp}
+
+# Set DATA_DIR
+export DATA_DIR=/eph/nvme0/skyrl-data
+```
+
+> ⚠️ **Warning**: Ephemeral storage is wiped when VM is deallocated/resized. Copy important results to persistent storage (Azure Blob, OS disk, etc.).
+
 ## Quick Start
 
 ### Option 1: Docker Compose (Recommended)
@@ -15,10 +47,16 @@ cd skyrl-tx/env
 export BASE_MODEL=mistralai/Mistral-7B-v0.1
 
 # Set data directory (for checkpoints, models, etc.)
-export DATA_DIR=/path/to/data
+export DATA_DIR=/eph/nvme0/skyrl-data
 
-# Start services
+# Install Docker Compose V2 if not available
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# Start services (use docker-compose if docker compose doesn't work)
 docker compose up -d
+# or: sudo docker-compose up -d
 
 # View logs
 docker compose logs -f
@@ -28,10 +66,11 @@ docker compose logs -f
 
 ```bash
 # Set data directory and base model
-export DATA_DIR=/path/to/data
+export DATA_DIR=/eph/nvme0/skyrl-data
 export BASE_MODEL=mistralai/Mistral-7B-v0.1
 
-# Build the SkyRL-TX image
+# Build the SkyRL-TX image (from repo root)
+cd ~/SkyRL
 docker build -t skyrl-tx -f skyrl-tx/env/Dockerfile .
 
 # Terminal 1: Start vLLM server (GPUs 4-7)
@@ -93,6 +132,20 @@ Modify `NVIDIA_VISIBLE_DEVICES` in `docker-compose.yml` to change allocation.
 
 ## Troubleshooting
 
+### Docker permission denied
+```bash
+sudo usermod -aG docker $USER
+newgrp docker  # Or log out and back in
+```
+
+### docker-compose not found
+```bash
+# Install Docker Compose V2 plugin
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+```
+
 ### vLLM fails to start
 - Ensure you have enough GPU memory
 - Check `docker compose logs vllm` for errors
@@ -102,6 +155,18 @@ Modify `NVIDIA_VISIBLE_DEVICES` in `docker-compose.yml` to change allocation.
 - Ensure `MAX_LORA_RANK` matches your training configuration
 - Default LoRA rank in SkyRL-TX is 32
 
-### Permission issues
-- Ensure `DATA_DIR` is writable by Docker
-- Run: `chmod -R 777 /path/to/data`
+### Permission issues on DATA_DIR
+```bash
+sudo chown -R $USER:$USER $DATA_DIR
+# Or if needed: chmod -R 777 $DATA_DIR
+```
+
+### Azure VM Storage Options
+
+| Mount | Size | Speed | Persistence | Use For |
+|-------|------|-------|-------------|---------|
+| `/` | ~124G | Slow | ✅ Persistent | OS, code |
+| `/mnt` | ~1TB | Fast | ❌ Temp | Temp cache |
+| `/eph/nvme0` | ~28TB | Very fast | ❌ Temp | Training data, checkpoints |
+
+Use `df -h` to check available storage on your VM.
