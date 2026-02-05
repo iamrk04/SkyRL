@@ -159,9 +159,9 @@ fi
 
 # Function to test GPU access
 test_gpu_access() {
-    # Try without sudo first, then with sudo
-    docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null || \
-    sudo docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null
+    # Try with a simple nvidia-smi command (no CUDA image needed)
+    docker run --rm --gpus all ubuntu nvidia-smi &> /dev/null || \
+    sudo docker run --rm --gpus all ubuntu nvidia-smi &> /dev/null
 }
 
 # Test GPU access first (no restart needed if it works)
@@ -208,7 +208,7 @@ else
         log_info "Trying alternative: running with --runtime=nvidia flag..."
         
         # Try with explicit runtime flag
-        if sudo docker run --rm --runtime=nvidia --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null; then
+        if sudo docker run --rm --runtime=nvidia --gpus all ubuntu nvidia-smi &> /dev/null; then
             log_info "GPU works with --runtime=nvidia flag"
             # Add runtime flag to compose
             export DOCKER_DEFAULT_RUNTIME=nvidia
