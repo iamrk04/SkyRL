@@ -19,13 +19,12 @@ WORKDIR /app/skyrl-tx
 RUN uv sync --extra gpu --extra tinker --extra skyrl_train
 
 # Create directories for runtime data (needs sudo in ray image)
-RUN sudo mkdir -p /data/{checkpoints,lora_models,tinker_db,ray,huggingface,tmp} && \
+RUN sudo mkdir -p /data/{checkpoints,lora_models,tinker_db,ray,huggingface,tmp,uv_cache} && \
     sudo chown -R $(whoami) /data
 
 # Environment variables
-# UV_CACHE_DIR stays in container (not on mounted volume) to avoid permission issues
 ENV RAY_TMPDIR=/data/ray \
-    UV_CACHE_DIR=/home/ray/.cache/uv \
+    UV_CACHE_DIR=/data/uv_cache \
     HF_HOME=/data/huggingface \
     TMPDIR=/data/tmp
 

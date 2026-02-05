@@ -268,14 +268,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 log_info "Building and starting services..."
-# Pass environment variables explicitly to docker compose (needed for sudo)
-$COMPOSE_CMD -f docker-compose.yml up --build -d
 
-# Note: If using sudo, env vars need to be passed explicitly
-if [ -n "$SUDO_PREFIX" ]; then
-    log_info "Re-running with explicit environment variables..."
-    sudo DATA_DIR="$DATA_DIR" BASE_MODEL="$BASE_MODEL" docker compose up --build -d
-fi
+# Always use sudo with explicit env vars to ensure they're passed correctly
+sudo DATA_DIR="$DATA_DIR" BASE_MODEL="$BASE_MODEL" docker compose up --build -d
 
 echo ""
 echo "================================================"
@@ -284,10 +279,14 @@ echo "================================================"
 echo "  vLLM:      http://localhost:7999 (GPUs 4-7)"
 echo "  SkyRL-TX:  http://localhost:8000 (GPUs 0-3)"
 echo ""
-echo "  View logs:  $COMPOSE_CMD logs -f"
-echo "  Stop:       $COMPOSE_CMD down"
-echo "  Restart:    $COMPOSE_CMD restart"
+echo "  View logs:"
+echo "    sudo docker compose logs -f          # All services"
+echo "    sudo docker compose logs -f vllm     # vLLM only"
+echo "    sudo docker compose logs -f skyrl-tx # SkyRL-TX only"
+echo ""
+echo "  Stop:      sudo docker compose down"
+echo "  Restart:   sudo docker compose restart"
 echo "================================================"
 echo ""
 log_info "Waiting for vLLM to be healthy (this may take a few minutes)..."
-echo "  Run '$COMPOSE_CMD logs -f vllm' to watch vLLM startup"
+echo "  Run 'sudo docker compose logs -f vllm' to watch vLLM startup"
