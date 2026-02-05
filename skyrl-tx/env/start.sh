@@ -268,7 +268,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 log_info "Building and starting services..."
-$COMPOSE_CMD up --build -d
+# Pass environment variables explicitly to docker compose (needed for sudo)
+$COMPOSE_CMD -f docker-compose.yml up --build -d
+
+# Note: If using sudo, env vars need to be passed explicitly
+if [ -n "$SUDO_PREFIX" ]; then
+    log_info "Re-running with explicit environment variables..."
+    sudo DATA_DIR="$DATA_DIR" BASE_MODEL="$BASE_MODEL" docker compose up --build -d
+fi
 
 echo ""
 echo "================================================"
