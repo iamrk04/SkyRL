@@ -108,12 +108,28 @@ fi
 # ============================================
 # Step 4: Check/Configure NVIDIA Docker Runtime
 # ============================================
+restart_docker() {
+    log_info "Restarting Docker daemon..."
+    sudo systemctl stop docker.socket docker.service 2>/dev/null || true
+    sleep 2
+    sudo systemctl start docker.socket docker.service
+    sleep 5  # Wait for docker to fully start
+    
+    # Wait until docker is responsive
+    for i in {1..10}; do
+        if docker info &> /dev/null || sudo docker info &> /dev/null; then
+            log_info "Docker daemon ready"
+            return 0
+        fi
+        log_info "Waiting for Docker daemon... ($i/10)"
+        sleep 2
+    done
+}
+
 configure_nvidia_runtime() {
     log_info "Configuring NVIDIA Docker runtime..."
     sudo nvidia-ctk runtime configure --runtime=docker
-    sudo systemctl restart docker
-    sleep 2  # Wait for docker to restart
-    log_info "NVIDIA Docker runtime configured"
+    log_info "NVIDIA Docker runtime configured (restart required)"
 }
 
 install_nvidia_toolkit() {
@@ -134,29 +150,100 @@ install_nvidia_toolkit() {
 }
 
 # Check if nvidia-container-toolkit is installed
+NEED_DOCKER_RESTART=false
 if ! dpkg -l | grep -q "nvidia-container-toolkit"; then
     log_warn "NVIDIA Container Toolkit not installed"
     install_nvidia_toolkit
+    NEED_DOCKER_RESTART=true
 fi
 
-# Try GPU access, configure runtime if it fails
-if ! $SUDO_PREFIX docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null; then
-    log_warn "GPU access failed. Configuring NVIDIA runtime..."
-    configure_nvidia_runtime
+# Function to test GPU access
+test_gpu_access() {
+    # Try without sudo first, then with sudo
+    docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null || \
+    sudo docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null
+}
+
+# Test GPU access first (no restart needed if it works)
+if test_gpu_access; then
+    log_info "GPU access verified ✓"
+else
+    log_warn "GPU access failed. Checking NVIDIA runtime configuration..."
     
-    # Try again
-    if ! $SUDO_PREFIX docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null; then
+    # Check if nvidia runtime is configured in daemon.json
+    if ! grep -q "nvidia" /etc/docker/daemon.json 2>/dev/null; then
+        log_info "NVIDIA runtime not configured in Docker"
+        configure_nvidia_runtime
+        NEED_DOCKER_RESTART=true
+    fi
+    
+    # Only restart if needed
+    if [ "$NEED_DOCKER_RESTART" = true ]; then
+        restart_docker
+        
+        # Update SUDO_PREFIX after docker restart
+        if docker info &> /dev/null; then
+            SUDO_PREFIX=""
+        else
+            SUDO_PREFIX="sudo"
+        fi
+    fi
+    
+    # Try again with retries
+    GPU_OK=false
+    for attempt in {1..3}; do
+        log_info "Testing GPU access (attempt $attempt/3)..."
+        if test_gpu_access; then
+            GPU_OK=true
+            break
+        fi
+        sleep 3
+    done
+    
+    if [ "$GPU_OK" = false ]; then
         log_error "Still cannot access GPUs from Docker."
         log_info "Checking nvidia-smi directly..."
-        if ! nvidia-smi &> /dev/null; then
-            log_error "NVIDIA driver not working. Please check driver installation."
+        nvidia-smi
+        log_info ""
+        log_info "Trying alternative: running with --runtime=nvidia flag..."
+        
+        # Try with explicit runtime flag
+        if sudo docker run --rm --runtime=nvidia --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null; then
+            log_info "GPU works with --runtime=nvidia flag"
+            # Add runtime flag to compose
+            export DOCKER_DEFAULT_RUNTIME=nvidia
         else
-            log_error "Docker GPU access issue. Try rebooting the VM."
+            log_error "GPU access still failing. Checking Docker daemon config..."
+            cat /etc/docker/daemon.json 2>/dev/null || echo "No daemon.json found"
+            log_info ""
+            log_info "Attempting manual fix..."
+            
+            # Manually create/fix daemon.json
+            sudo tee /etc/docker/daemon.json > /dev/null <<EOF
+{
+    "runtimes": {
+        "nvidia": {
+            "args": [],
+            "path": "nvidia-container-runtime"
+        }
+    },
+    "default-runtime": "nvidia"
+}
+EOF
+            # Restart docker again
+            restart_docker
+            
+            # Final test
+            if ! test_gpu_access; then
+                log_error "All attempts failed. Debug info:"
+                sudo docker info | grep -i runtime || true
+                exit 1
+            fi
         fi
-        exit 1
+    else
+        log_info "GPU access verified ✓"
     fi
 fi
-log_info "GPU access verified ✓"
 
 # ============================================
 # Step 5: Create Data Directories
