@@ -1,6 +1,6 @@
 #!/bin/bash
 # SkyRL-TX Startup Script
-# Usage: ./start.sh [BASE_MODEL] [DATA_DIR]
+# Usage: chmod +x start.sh && ./start.sh [BASE_MODEL] [DATA_DIR]
 #
 # This script handles everything:
 # - Installs Docker Compose if missing
@@ -106,36 +106,55 @@ else
 fi
 
 # ============================================
-# Step 4: Check NVIDIA Docker Runtime
+# Step 4: Check/Configure NVIDIA Docker Runtime
 # ============================================
-if ! $SUDO_PREFIX docker info 2>/dev/null | grep -q "nvidia"; then
-    log_warn "NVIDIA Docker runtime may not be configured"
-    log_info "Checking if nvidia-container-toolkit is installed..."
+configure_nvidia_runtime() {
+    log_info "Configuring NVIDIA Docker runtime..."
+    sudo nvidia-ctk runtime configure --runtime=docker
+    sudo systemctl restart docker
+    sleep 2  # Wait for docker to restart
+    log_info "NVIDIA Docker runtime configured"
+}
+
+install_nvidia_toolkit() {
+    log_info "Installing NVIDIA Container Toolkit..."
     
-    if ! command -v nvidia-container-toolkit &> /dev/null && ! dpkg -l | grep -q nvidia-container-toolkit; then
-        log_info "Installing NVIDIA Container Toolkit..."
-        
-        # Add NVIDIA repo
-        distribution=$(. /etc/os-release;echo $ID$VERSION_ID) 2>/dev/null || distribution="ubuntu22.04"
-        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-        curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
-            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-            sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-        
-        sudo apt-get update
-        sudo apt-get install -y nvidia-container-toolkit
-        sudo nvidia-ctk runtime configure --runtime=docker
-        sudo systemctl restart docker
-        
-        log_info "NVIDIA Container Toolkit installed"
-    fi
+    # Add NVIDIA repo
+    distribution=$(. /etc/os-release;echo $ID$VERSION_ID) 2>/dev/null || distribution="ubuntu22.04"
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
+    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+        sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+    
+    sudo apt-get update
+    sudo apt-get install -y nvidia-container-toolkit
+    configure_nvidia_runtime
+    
+    log_info "NVIDIA Container Toolkit installed"
+}
+
+# Check if nvidia-container-toolkit is installed
+if ! dpkg -l | grep -q "nvidia-container-toolkit"; then
+    log_warn "NVIDIA Container Toolkit not installed"
+    install_nvidia_toolkit
 fi
 
-# Verify GPU access
+# Try GPU access, configure runtime if it fails
 if ! $SUDO_PREFIX docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null; then
-    log_error "Cannot access GPUs from Docker. Please check NVIDIA driver and container toolkit installation."
-    log_info "Try: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
-    exit 1
+    log_warn "GPU access failed. Configuring NVIDIA runtime..."
+    configure_nvidia_runtime
+    
+    # Try again
+    if ! $SUDO_PREFIX docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &> /dev/null; then
+        log_error "Still cannot access GPUs from Docker."
+        log_info "Checking nvidia-smi directly..."
+        if ! nvidia-smi &> /dev/null; then
+            log_error "NVIDIA driver not working. Please check driver installation."
+        else
+            log_error "Docker GPU access issue. Try rebooting the VM."
+        fi
+        exit 1
+    fi
 fi
 log_info "GPU access verified ✓"
 
