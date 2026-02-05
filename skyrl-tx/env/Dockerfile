@@ -26,7 +26,10 @@ RUN sudo mkdir -p /data/{checkpoints,lora_models,tinker_db,ray,huggingface,tmp,u
 ENV RAY_TMPDIR=/data/ray \
     UV_CACHE_DIR=/data/uv_cache \
     HF_HOME=/data/huggingface \
-    TMPDIR=/data/tmp
+    TMPDIR=/data/tmp \
+    UV_PROJECT_ENVIRONMENT=/app/skyrl-tx/.venv \
+    VIRTUAL_ENV=/app/skyrl-tx/.venv \
+    PATH=/app/skyrl-tx/.venv/bin:$PATH
 
 # Start bash by default - users start services manually
 CMD ["bash"]

@@ -72,10 +72,11 @@ services:
       - RAY_TMPDIR=/tmp/ray
       - HF_HOME=/data/huggingface
       - VIRTUAL_ENV=/app/skyrl-tx/.venv
-      - PATH=/app/skyrl-tx/.venv/bin:/usr/local/bin:/usr/bin:/bin
+      - UV_PROJECT_ENVIRONMENT=/app/skyrl-tx/.venv
+      - PATH=/app/skyrl-tx/.venv/bin:/home/ray/.local/bin:/usr/local/bin:/usr/bin:/bin
     working_dir: /app/skyrl-tx
     command: >
-      bash -c "umask 000 && exec /app/skyrl-tx/.venv/bin/python
+      bash -c "umask 000 && exec uv run --extra gpu --extra tinker --extra skyrl_train
       -m tx.tinker.api
       --base-model ${BASE_MODEL:-Qwen/Qwen3-0.6B}
       --backend skyrl_train
