@@ -70,9 +70,9 @@ services:
       - ${DATA_DIR:-./data}/huggingface:/data/huggingface
     environment:
       - HF_HOME=/data/huggingface
-      # Tell Ray to use the venv Python directly for workers (skip uv, avoid version mismatches)
-      - RAY_RUNTIME_ENV_PY_EXECUTABLE=/app/skyrl-tx/.venv/bin/python
     working_dir: /app/skyrl-tx
+    # uv is wrapped in Docker to use the pre-built venv directly
+    # This prevents Ray from creating new venvs per worker
     command: >
       bash -c "umask 000 && exec uv run --extra gpu --extra tinker --extra skyrl_train
       -m tx.tinker.api
