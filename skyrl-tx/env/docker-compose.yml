@@ -46,7 +46,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 180s
+      start_period: 60s
 
   # SkyRL-TX training server (uses GPUs 0-3)
   skyrl-tx:
@@ -73,7 +73,7 @@ services:
       - HF_HOME=/data/huggingface
     command: >
       bash -c "umask 000 && exec uv run --extra gpu --extra tinker --extra skyrl_train
-            -m tx.tinker.api
+      -m tx.tinker.api
       --base-model ${BASE_MODEL:-Qwen/Qwen3-0.6B}
       --backend skyrl_train
       --database-url sqlite:////tmp/tinker.db
@@ -85,4 +85,4 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 120s
+      start_period: 60s
