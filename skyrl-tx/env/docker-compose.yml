@@ -69,11 +69,7 @@ services:
       - ${DATA_DIR:-./data}/lora_models:/data/lora_models
       - ${DATA_DIR:-./data}/huggingface:/data/huggingface
     environment:
-      - RAY_TMPDIR=/tmp/ray
       - HF_HOME=/data/huggingface
-      - VIRTUAL_ENV=/app/skyrl-tx/.venv
-      - UV_PROJECT_ENVIRONMENT=/app/skyrl-tx/.venv
-      - PATH=/app/skyrl-tx/.venv/bin:/home/ray/.local/bin:/usr/local/bin:/usr/bin:/bin
     working_dir: /app/skyrl-tx
     command: >
       bash -c "umask 000 && exec uv run --extra gpu --extra tinker --extra skyrl_train

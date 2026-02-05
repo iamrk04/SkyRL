@@ -18,18 +18,12 @@ RUN git clone -b rk/fix https://github.com/iamrk04/SkyRL.git .
 WORKDIR /app/skyrl-tx
 RUN uv sync --extra gpu --extra tinker --extra skyrl_train
 
-# Create directories for runtime data (needs sudo in ray image)
-RUN sudo mkdir -p /data/{checkpoints,lora_models,tinker_db,ray,huggingface,tmp,uv_cache} && \
-    sudo chown -R $(whoami) /data
+# Create mount points for runtime data
+RUN sudo mkdir -p /data && sudo chown -R $(whoami) /data
 
 # Environment variables
-ENV RAY_TMPDIR=/data/ray \
-    UV_CACHE_DIR=/data/uv_cache \
-    HF_HOME=/data/huggingface \
-    TMPDIR=/data/tmp \
-    UV_PROJECT_ENVIRONMENT=/app/skyrl-tx/.venv \
-    VIRTUAL_ENV=/app/skyrl-tx/.venv \
-    PATH=/app/skyrl-tx/.venv/bin:$PATH
+ENV UV_CACHE_DIR=/home/ray/.cache/uv \
+    HF_HOME=/data/huggingface
 
 # Start bash by default - users start services manually
 CMD ["bash"]
