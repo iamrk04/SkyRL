@@ -5,6 +5,15 @@
 #   ./start.sh                           # Uses defaults
 #   ./start.sh Qwen/Qwen3-0.6B           # Custom model
 #   ./start.sh mistralai/Mistral-7B-v0.1 /mnt/data  # Custom model + data dir
+#
+# Persistent data (mounted from host):
+#   - checkpoints/   - Training checkpoints
+#   - lora_models/   - Trained LoRA adapters (shared with vLLM)
+#   - huggingface/   - Downloaded model cache
+#
+# Ephemeral data (container-local, auto-cleaned on 'docker compose down'):
+#   - /tmp/ray       - Ray temporary files
+#   - /tmp/tinker.db - Experiment database
 
 services:
   # vLLM inference server (uses GPUs 4-7)
@@ -56,16 +65,24 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ${DATA_DIR:-./data}:/data
+      - ${DATA_DIR:-./data}/checkpoints:/data/checkpoints
+      - ${DATA_DIR:-./data}/lora_models:/data/lora_models
+      - ${DATA_DIR:-./data}/huggingface:/data/huggingface
     environment:
-      - RAY_TMPDIR=/data/ray
+      - RAY_TMPDIR=/tmp/ray
       - HF_HOME=/data/huggingface
     command: >
       bash -c "umask 000 && exec uv run --extra gpu --extra tinker --extra skyrl_train
-      -m tx.tinker.api
+            -m tx.tinker.api
       --base-model ${BASE_MODEL:-Qwen/Qwen3-0.6B}
       --backend skyrl_train
-      --database-url sqlite:////data/tinker_db/tinker.db
+      --database-url sqlite:////tmp/tinker.db
       --checkpoints-base /data/checkpoints
       --external-inference-url http://vllm:8000
       --external-inference-lora-base /data/lora_models"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s

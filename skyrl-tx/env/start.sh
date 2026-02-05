@@ -7,6 +7,14 @@
 # - Sets up docker permissions
 # - Creates data directories
 # - Starts all services
+#
+# Persistent data (on host):
+#   - checkpoints/   - Training checkpoints
+#   - lora_models/   - Trained LoRA adapters
+#   - huggingface/   - Downloaded model cache
+#
+# Ephemeral data (container-local, auto-cleaned on 'docker compose down'):
+#   - Ray temp files, experiment database
 
 set -e
 
@@ -253,9 +261,9 @@ if [ ! -d "$DATA_DIR" ]; then
     sudo mkdir -p "$DATA_DIR"
 fi
 
-# Create subdirectories and set permissions (777 so container user can write)
-mkdir -p "$DATA_DIR"/{checkpoints,lora_models,tinker_db,huggingface,ray,tmp,uv_cache} 2>/dev/null || \
-sudo mkdir -p "$DATA_DIR"/{checkpoints,lora_models,tinker_db,huggingface,ray,tmp,uv_cache}
+# Create only persistent directories (temp data is container-local)
+mkdir -p "$DATA_DIR"/{checkpoints,lora_models,huggingface} 2>/dev/null || \
+sudo mkdir -p "$DATA_DIR"/{checkpoints,lora_models,huggingface}
 
 # Make writable by anyone (container runs as different user)
 sudo chmod -R 777 "$DATA_DIR"
@@ -284,8 +292,11 @@ echo "    sudo docker compose logs -f          # All services"
 echo "    sudo docker compose logs -f vllm     # vLLM only"
 echo "    sudo docker compose logs -f skyrl-tx # SkyRL-TX only"
 echo ""
-echo "  Stop:      sudo docker compose down"
-echo "  Restart:   sudo docker compose restart"
+echo "  Stop:     sudo docker compose down"
+echo "  Restart:  sudo docker compose restart"
+echo ""
+echo "  Persistent: $DATA_DIR/{checkpoints,lora_models,huggingface}"
+echo "  Ephemeral:  Ray temp, tinker DB (auto-cleaned on 'down')"
 echo "================================================"
 echo ""
 log_info "Waiting for vLLM to be healthy (this may take a few minutes)..."
