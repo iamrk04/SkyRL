@@ -10,6 +10,7 @@ from sqlmodel import SQLModel, select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.exc import IntegrityError, TimeoutError as SATimeoutError
+from sqlalchemy import text, event
 import asyncio
 import os
 import signal
@@ -47,9 +48,20 @@ async def lifespan(app: FastAPI):
 
     db_url = get_async_database_url(app.state.engine_config.database_url)
     app.state.db_engine = create_async_engine(db_url, echo=False)
+    
+    # For SQLite: set busy_timeout on every new connection via event listener
+    if "sqlite" in db_url:
+        @event.listens_for(app.state.db_engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
 
     async with app.state.db_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+        # Enable WAL mode for SQLite (persistent, only needs to be set once)
+        if "sqlite" in db_url:
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
 
     # Setup external inference client if configured
     if app.state.engine_config.external_inference_url:

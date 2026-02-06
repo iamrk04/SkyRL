@@ -195,7 +195,19 @@ class TinkerEngine:
     ):
         """Initialize the engine with a database connection and base model."""
         self.config = config
-        self.db_engine = create_engine(config.database_url, echo=False)
+        
+        # SQLite: enable WAL mode + timeout for concurrent access from API + engine processes
+        if config.database_url.startswith("sqlite"):
+            from sqlalchemy import text
+            self.db_engine = create_engine(
+                config.database_url, echo=False,
+                connect_args={"timeout": 30, "check_same_thread": False},
+            )
+            with self.db_engine.connect() as conn:
+                conn.execute(text("PRAGMA journal_mode=WAL"))
+                conn.commit()
+        else:
+            self.db_engine = create_engine(config.database_url, echo=False)
 
         # Initialize the backend (handles model state, computation, and adapter management)
         backend_class, backend_config_class = get_backend_classes(config.backend)
