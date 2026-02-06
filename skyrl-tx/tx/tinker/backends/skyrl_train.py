@@ -4,6 +4,7 @@ Uses SkyRL-Train infrastructure for supervised training with cross-entropy loss.
 Currently supports a single model only.
 """
 
+import math
 import os
 import tarfile
 import tempfile
@@ -174,6 +175,48 @@ class SkyRLTrainBackend(AbstractBackend):
         batch.metadata = {"response_length": max_response_len}
         return batch
 
+    def _get_dp_size(self) -> int:
+        """Get the data parallelism size from the dispatch."""
+        return self._dispatch.get_lcm_dp_size()
+
+    def _pad_batch_for_dp(self, batch: TrainingInputBatch, dp_size: int) -> tuple[TrainingInputBatch, int]:
+        """Pad batch to be divisible by dp_size.
+        
+        Similar to trainer.pad_batch() but simplified for forward_backward use case.
+        Padded samples have loss_mask=0 so they don't contribute to gradients.
+        
+        Returns:
+            Tuple of (padded_batch, num_padding_samples)
+        """
+        batch_size = len(batch)
+        if batch_size % dp_size == 0:
+            return batch, 0
+        
+        target_size = math.ceil(batch_size / dp_size) * dp_size
+        num_padding = target_size - batch_size
+        
+        # Create padding following the same approach as trainer.pad_batch()
+        padded_data = {}
+        for key, tensor in batch.items():
+            if tensor is not None:
+                additional_dims = tuple(tensor.shape[1:]) if len(tensor.shape) > 1 else ()
+                
+                if key == "loss_mask":
+                    # Zero out loss_mask for padded samples so they don't contribute to gradients
+                    padding_tensor = torch.zeros(num_padding, *additional_dims, dtype=tensor.dtype, device=tensor.device)
+                else:
+                    # Clone from beginning of batch to create padding samples
+                    # Use modulo to handle case where num_padding > batch_size
+                    indices = [i % batch_size for i in range(num_padding)]
+                    padding_tensor = tensor[indices].clone()
+                padded_data[key] = torch.cat([tensor, padding_tensor], dim=0)
+        
+        padded_batch = TrainingInputBatch(padded_data)
+        padded_batch.metadata = batch.metadata
+        
+        logger.debug(f"Padded batch from {batch_size} to {target_size} samples (dp_size={dp_size})")
+        return padded_batch, num_padding
+
     def forward_backward(
         self,
         prepared_batch: types.PreparedModelPassBatch,
@@ -183,7 +226,16 @@ class SkyRLTrainBackend(AbstractBackend):
             return {}
 
         batch = self._to_training_batch(prepared_batch)
+        
+        # Pad batch to be divisible by dp_size (required by dispatch layer)
+        dp_size = self._get_dp_size()
+        batch, num_padding = self._pad_batch_for_dp(batch, dp_size)
+        
         data = self._dispatch.forward_backward("policy", batch, loss_fn=loss_fn)
+        
+        # Remove padding from outputs if any was added
+        if num_padding > 0 and "loss_fn_outputs" in data:
+            data["loss_fn_outputs"] = data["loss_fn_outputs"][:-num_padding]
 
         results = {}
         for request_id, _, start_idx, end_idx in prepared_batch.request_batch_slices:
