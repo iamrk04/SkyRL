@@ -90,7 +90,7 @@ class SkyRLTrainBackend(AbstractBackend):
         self._actor_group: PPORayActorGroup | None = None
         self._dispatch: WorkerDispatch | None = None
         self._cfg = None
-        self._tokenizer = AutoTokenizer.from_pretrained(self.base_model)
+        self._tokenizer = AutoTokenizer.from_pretrained(self.base_model, trust_remote_code=True)
 
         # Ensure pad_token_id is set (many models like Mistral don't have one by default)
         if self._tokenizer.pad_token_id is None:
