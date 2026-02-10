@@ -59,7 +59,34 @@ class SkyRLTrainBackendConfig(BaseModel, extra="forbid"):
     training and inference parameters via backend_config.
     """
 
-    pass
+    gpu_memory_utilization: float | None = None
+    """vLLM KV-cache GPU memory fraction for inference engines (default 0.8).
+    Lower values (e.g. 0.4-0.5) reduce inference memory pressure when
+    colocating with training on the same GPUs."""
+
+    max_num_seqs: int | None = None
+    """Max concurrent sequences for vLLM inference (default 1024).
+    Reduce to lower KV-cache memory."""
+
+    max_num_batched_tokens: int | None = None
+    """Max batched tokens for vLLM inference (default 8192).
+    Reduce to lower inference memory."""
+
+    enforce_eager: bool | None = None
+    """Disable CUDA graphs in vLLM (default True).
+    True saves memory, False may improve throughput."""
+
+
+def _detect_num_gpus() -> int:
+    """Detect the number of available GPUs from CUDA_VISIBLE_DEVICES or torch."""
+    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cuda_visible is not None:
+        # Handle both "0,1,2,3" and empty string
+        devices = [d.strip() for d in cuda_visible.split(",") if d.strip()]
+        return len(devices)
+    if torch.cuda.is_available():
+        return torch.cuda.device_count()
+    return 1
 
 
 def _build_config(
@@ -68,6 +95,9 @@ def _build_config(
     lora_config: types.LoraConfig | None = None,
 ):
     """Build config for SkyRL-Train workers using default config.
+
+    Auto-detects the number of available GPUs from CUDA_VISIBLE_DEVICES and
+    adjusts placement / inference settings accordingly to avoid OOM.
 
     Args:
         base_model: HuggingFace model path
@@ -80,6 +110,40 @@ def _build_config(
     # Disable scheduler - Tinker manages learning rate externally via set_lr()
     cfg.trainer.policy.optimizer_config.scheduler = "constant"
     cfg.trainer.policy.optimizer_config.num_warmup_steps = 0
+
+    # ---- GPU-aware placement ------------------------------------------------
+    num_gpus = _detect_num_gpus()
+    logger.info(f"Detected {num_gpus} available GPU(s)")
+
+    # Match policy/ref/critic placement to available GPUs
+    cfg.trainer.placement.policy_num_gpus_per_node = num_gpus
+    cfg.trainer.placement.ref_num_gpus_per_node = num_gpus
+    cfg.trainer.placement.critic_num_gpus_per_node = num_gpus
+
+    # Inference engine TP must match policy GPU count for colocate_all
+    cfg.generator.inference_engine_tensor_parallel_size = num_gpus
+
+    # ---- Colocate memory optimisations --------------------------------------
+    # When colocating training + inference on the same GPUs, reduce vLLM memory
+    # pressure so that the training working set (model + optimizer + grads +
+    # activations) and the inference working set (model + KV-cache) can both fit.
+    cfg.generator.gpu_memory_utilization = (
+        config.gpu_memory_utilization if config.gpu_memory_utilization is not None else 0.45
+    )
+    cfg.generator.max_num_seqs = (
+        config.max_num_seqs if config.max_num_seqs is not None else 1024
+    )
+    cfg.generator.max_num_batched_tokens = (
+        config.max_num_batched_tokens if config.max_num_batched_tokens is not None else 4096
+    )
+    if config.enforce_eager is not None:
+        cfg.generator.enforce_eager = config.enforce_eager
+
+    logger.info(
+        f"Colocate memory settings: gpu_memory_utilization={cfg.generator.gpu_memory_utilization}, "
+        f"max_num_seqs={cfg.generator.max_num_seqs}, "
+        f"max_num_batched_tokens={cfg.generator.max_num_batched_tokens}"
+    )
 
     # Apply LoRA config if provided
     if lora_config is not None and lora_config.rank > 0:
