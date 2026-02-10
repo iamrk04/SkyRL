@@ -245,7 +245,7 @@ class SkyRLTrainBackend(AbstractBackend):
 
     def _get_dp_size(self) -> int:
         """Get the data parallelism size from the dispatch."""
-        return self._dispatch.get_lcm_dp_size()
+        return self._trainer.dispatch.get_lcm_dp_size()
 
     def _pad_batch_for_dp(self, batch: TrainingInputBatch, dp_size: int) -> tuple[TrainingInputBatch, int]:
         """Pad batch to be divisible by dp_size.
@@ -657,7 +657,7 @@ class SkyRLTrainBackend(AbstractBackend):
         Rank 0 worker saves the weights to output_dir.
         """
         result = ray.get(
-            self._actor_group.async_run_ray_method(
+            self._trainer.policy_model.async_run_ray_method(
                 "pass_through",
                 "_save_lora_weights",
                 output_dir=output_dir,
