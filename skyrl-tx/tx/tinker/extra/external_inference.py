@@ -27,7 +27,8 @@ def _extract_checkpoint_sync(checkpoint_path: AnyPath, target_dir: Path) -> None
     if not target_dir.exists():
         try:
             with download_and_unpack(checkpoint_path) as extracted_path:
-                extracted_path.rename(target_dir)
+                # Use shutil.move instead of rename to handle cross-device moves
+                shutil.move(str(extracted_path), str(target_dir))
         except FileExistsError:
             # This could happen if two processes try to download the file.
             # In that case the other process won the race and created target_dir.
@@ -101,16 +102,6 @@ class ExternalInferenceClient:
         """
         prompt_tokens = [token for chunk in request.prompt.chunks for token in chunk.tokens]
 
-        # Extract the checkpoint if it doesn't already exist
-        if not target_dir.exists():
-            try:
-                with download_and_unpack(checkpoint_path) as extracted_path:
-                    # Use shutil.move instead of rename to handle cross-device moves
-                    shutil.move(str(extracted_path), str(target_dir))
-            except FileExistsError:
-                # This could happen if two processes try to download the file.
-                # In that case the other process won the race and created target_dir.
-                pass
         if base_model:
             # Base model sampling: use the model name directly, no LoRA checkpoint needed
             model_name = base_model

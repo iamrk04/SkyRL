@@ -53,9 +53,6 @@ async def lifespan(app: FastAPI):
 
     async with app.state.db_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
-        # Enable WAL mode for SQLite (persistent, only needs to be set once)
-        if "sqlite" in db_url:
-            await conn.execute(text("PRAGMA journal_mode=WAL"))
 
     # Setup external inference client if configured
     if app.state.engine_config.external_inference_url:
