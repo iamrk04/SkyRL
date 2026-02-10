@@ -36,13 +36,7 @@ def _extract_checkpoint_sync(checkpoint_path: AnyPath, target_dir: Path) -> None
 
 
 class ExternalInferenceClient:
-    """Client for calling external inference engines (e.g., vLLM).
-    
-    NOTE: External inference currently only supports LoRA models. It uses vLLM's
-    dynamic LoRA loading feature (lora_filesystem_resolver plugin) to load
-    adapters on-the-fly. Full fine-tuned models are not supported with external
-    inference - they would require restarting vLLM with the new base model.
-    """
+    """Client for calling external inference engines (e.g., vLLM)."""
 
     def __init__(self, engine_config: EngineConfig, db_engine):
         self.base_url = f"{engine_config.external_inference_url}/v1"

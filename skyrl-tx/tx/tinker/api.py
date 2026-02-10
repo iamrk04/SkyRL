@@ -10,7 +10,6 @@ from sqlmodel import SQLModel, select, func
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.exc import IntegrityError, TimeoutError as SATimeoutError
-from sqlalchemy import text, event
 import asyncio
 import os
 import signal
