@@ -656,6 +656,12 @@ class SkyRLTrainBackend(AbstractBackend):
         Uses skyrl-train's collect_lora_params to gather params from FSDP model.
         Rank 0 worker saves the weights to output_dir.
         """
+        # Ensure model is on GPU before collecting LoRA params.
+        # collect_lora_params calls param.full_tensor() which triggers an NCCL
+        # all-gather.  If the model was CPU-offloaded (offload_after_step=true),
+        # NCCL fails with "No backend type associated with device type cpu".
+        self._trainer.dispatch._ensure_on_gpu("policy", need_optimizer=False, need_model=True)
+
         result = ray.get(
             self._trainer.policy_model.async_run_ray_method(
                 "pass_through",
