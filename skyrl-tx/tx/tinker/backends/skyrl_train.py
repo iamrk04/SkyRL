@@ -59,28 +59,29 @@ class SkyRLTrainBackendConfig(BaseModel, extra="forbid"):
     training and inference parameters via backend_config.
     """
 
-    enable_inference: bool = False
+    colocate: bool = False
     """When True, colocated inference engines are created alongside training
-    workers for internal sampling via sample().  When False (default), no
-    inference engines are created — use this when sampling is handled by an
-    external vLLM server (--external-inference-url)."""
+    workers so the backend can serve sample() requests internally.
+    When False (default), no inference engines are created and sampling
+    must be handled by an external server (--external-inference-url).
+
+    Enable via: --backend-config '{"colocate": true}'"""
 
     gpu_memory_utilization: float | None = None
-    """vLLM KV-cache GPU memory fraction for inference engines (default 0.8).
-    Lower values (e.g. 0.4-0.5) reduce inference memory pressure when
-    colocating with training on the same GPUs."""
+    """vLLM GPU memory fraction for colocated inference (default 0.45).
+    Only used when colocate=True."""
 
     max_num_seqs: int | None = None
-    """Max concurrent sequences for vLLM inference (default 1024).
-    Reduce to lower KV-cache memory."""
+    """Max concurrent sequences for colocated vLLM (default 256).
+    Only used when colocate=True."""
 
     max_num_batched_tokens: int | None = None
-    """Max batched tokens for vLLM inference (default 8192).
-    Reduce to lower inference memory."""
+    """Max batched tokens for colocated vLLM (default 4096).
+    Only used when colocate=True."""
 
     enforce_eager: bool | None = None
-    """Disable CUDA graphs in vLLM (default True).
-    True saves memory, False may improve throughput."""
+    """Disable CUDA graphs in colocated vLLM to save memory.
+    Only used when colocate=True."""
 
 
 def _detect_num_gpus() -> int:
@@ -126,14 +127,11 @@ def _build_config(
     cfg.trainer.placement.ref_num_gpus_per_node = num_gpus
     cfg.trainer.placement.critic_num_gpus_per_node = num_gpus
 
-    # Inference engine TP must match policy GPU count for colocate_all
-    cfg.generator.inference_engine_tensor_parallel_size = num_gpus
+    if config.colocate:
+        # Inference engine TP must match policy GPU count for colocate_all
+        cfg.generator.inference_engine_tensor_parallel_size = num_gpus
 
-    if config.enable_inference:
-        # ---- Colocate memory optimisations ----------------------------------
-        # When colocating training + inference on the same GPUs, reduce vLLM
-        # memory so training (model + optimizer + grads + activations) and
-        # inference (model + KV-cache) can both fit.
+        # Reduce vLLM memory so training + inference can share GPUs
         cfg.generator.gpu_memory_utilization = (
             config.gpu_memory_utilization if config.gpu_memory_utilization is not None else 0.45
         )
@@ -147,13 +145,13 @@ def _build_config(
             cfg.generator.enforce_eager = config.enforce_eager
 
         logger.info(
-            f"Colocate memory settings: gpu_memory_utilization={cfg.generator.gpu_memory_utilization}, "
+            f"Colocate enabled — gpu_memory_utilization={cfg.generator.gpu_memory_utilization}, "
             f"max_num_seqs={cfg.generator.max_num_seqs}, "
             f"max_num_batched_tokens={cfg.generator.max_num_batched_tokens}"
         )
     else:
         cfg.trainer.placement.colocate_all = False
-        logger.info("Inference engines disabled — training only (use --external-inference-url for sampling)")
+        logger.info("Colocate disabled — training only (use --external-inference-url for sampling)")
 
     # Apply LoRA config if provided
     if lora_config is not None and lora_config.rank > 0:
@@ -205,13 +203,9 @@ class SkyRLTrainBackend(AbstractBackend):
             logger.info("Initializing Ray with runtime environment")
             initialize_ray(self._cfg)
 
-        # Create placement group and inference engines only when internal inference is enabled.
-        # When using --external-inference-url, sampling is handled by an external vLLM server
-        # and we only need training workers here.
-        if self.config.enable_inference:
+        if self.config.colocate:
             colocate_pg = self._create_colocate_pg()
-
-            logger.info(f"Creating {self._cfg.generator.num_inference_engines} inference engines")
+            logger.info(f"Creating {self._cfg.generator.num_inference_engines} colocated inference engines")
             self._inference_engine_client = InferenceEngineClient(
                 create_ray_wrapped_inference_engines_from_config(self._cfg, colocate_pg, self._tokenizer),
                 self._tokenizer,
@@ -219,7 +213,6 @@ class SkyRLTrainBackend(AbstractBackend):
             )
         else:
             colocate_pg = None
-            logger.info("Skipping inference engine creation (enable_inference=False)")
 
         # Create trainer
         tracker = Tracking(
