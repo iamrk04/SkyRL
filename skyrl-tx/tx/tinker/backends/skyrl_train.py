@@ -59,6 +59,12 @@ class SkyRLTrainBackendConfig(BaseModel, extra="forbid"):
     training and inference parameters via backend_config.
     """
 
+    enable_inference: bool = False
+    """When True, colocated inference engines are created alongside training
+    workers for internal sampling via sample().  When False (default), no
+    inference engines are created — use this when sampling is handled by an
+    external vLLM server (--external-inference-url)."""
+
     gpu_memory_utilization: float | None = None
     """vLLM KV-cache GPU memory fraction for inference engines (default 0.8).
     Lower values (e.g. 0.4-0.5) reduce inference memory pressure when
@@ -123,27 +129,31 @@ def _build_config(
     # Inference engine TP must match policy GPU count for colocate_all
     cfg.generator.inference_engine_tensor_parallel_size = num_gpus
 
-    # ---- Colocate memory optimisations --------------------------------------
-    # When colocating training + inference on the same GPUs, reduce vLLM memory
-    # pressure so that the training working set (model + optimizer + grads +
-    # activations) and the inference working set (model + KV-cache) can both fit.
-    cfg.generator.gpu_memory_utilization = (
-        config.gpu_memory_utilization if config.gpu_memory_utilization is not None else 0.45
-    )
-    cfg.generator.max_num_seqs = (
-        config.max_num_seqs if config.max_num_seqs is not None else 1024
-    )
-    cfg.generator.max_num_batched_tokens = (
-        config.max_num_batched_tokens if config.max_num_batched_tokens is not None else 4096
-    )
-    if config.enforce_eager is not None:
-        cfg.generator.enforce_eager = config.enforce_eager
+    if config.enable_inference:
+        # ---- Colocate memory optimisations ----------------------------------
+        # When colocating training + inference on the same GPUs, reduce vLLM
+        # memory so training (model + optimizer + grads + activations) and
+        # inference (model + KV-cache) can both fit.
+        cfg.generator.gpu_memory_utilization = (
+            config.gpu_memory_utilization if config.gpu_memory_utilization is not None else 0.45
+        )
+        cfg.generator.max_num_seqs = (
+            config.max_num_seqs if config.max_num_seqs is not None else 256
+        )
+        cfg.generator.max_num_batched_tokens = (
+            config.max_num_batched_tokens if config.max_num_batched_tokens is not None else 4096
+        )
+        if config.enforce_eager is not None:
+            cfg.generator.enforce_eager = config.enforce_eager
 
-    logger.info(
-        f"Colocate memory settings: gpu_memory_utilization={cfg.generator.gpu_memory_utilization}, "
-        f"max_num_seqs={cfg.generator.max_num_seqs}, "
-        f"max_num_batched_tokens={cfg.generator.max_num_batched_tokens}"
-    )
+        logger.info(
+            f"Colocate memory settings: gpu_memory_utilization={cfg.generator.gpu_memory_utilization}, "
+            f"max_num_seqs={cfg.generator.max_num_seqs}, "
+            f"max_num_batched_tokens={cfg.generator.max_num_batched_tokens}"
+        )
+    else:
+        cfg.trainer.placement.colocate_all = False
+        logger.info("Inference engines disabled — training only (use --external-inference-url for sampling)")
 
     # Apply LoRA config if provided
     if lora_config is not None and lora_config.rank > 0:
@@ -195,16 +205,21 @@ class SkyRLTrainBackend(AbstractBackend):
             logger.info("Initializing Ray with runtime environment")
             initialize_ray(self._cfg)
 
-        # Create placement group
-        colocate_pg = self._create_colocate_pg()
+        # Create placement group and inference engines only when internal inference is enabled.
+        # When using --external-inference-url, sampling is handled by an external vLLM server
+        # and we only need training workers here.
+        if self.config.enable_inference:
+            colocate_pg = self._create_colocate_pg()
 
-        # Create inference engine client
-        logger.info(f"Creating {self._cfg.generator.num_inference_engines} inference engines")
-        self._inference_engine_client = InferenceEngineClient(
-            create_ray_wrapped_inference_engines_from_config(self._cfg, colocate_pg, self._tokenizer),
-            self._tokenizer,
-            self._cfg,
-        )
+            logger.info(f"Creating {self._cfg.generator.num_inference_engines} inference engines")
+            self._inference_engine_client = InferenceEngineClient(
+                create_ray_wrapped_inference_engines_from_config(self._cfg, colocate_pg, self._tokenizer),
+                self._tokenizer,
+                self._cfg,
+            )
+        else:
+            colocate_pg = None
+            logger.info("Skipping inference engine creation (enable_inference=False)")
 
         # Create trainer
         tracker = Tracking(
@@ -236,8 +251,9 @@ class SkyRLTrainBackend(AbstractBackend):
         logger.info("Building models.")
         self._trainer.build_models(PolicyWorker, CriticWorker, RefWorker)
 
-        logger.info("Initializing weight sync state.")
-        self._trainer.init_weight_sync_state()
+        if self._inference_engine_client is not None:
+            logger.info("Initializing weight sync state.")
+            self._trainer.init_weight_sync_state()
 
         self._model_id = model_id
         self._model_metadata = types.ModelMetadata(adapter_index=0, lora_config=lora_config)
