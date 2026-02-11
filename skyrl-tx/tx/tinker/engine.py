@@ -515,7 +515,12 @@ class TinkerEngine:
         # When the caller provides a sampling_session_seq_id the save is
         # transient — weights only need to reach the inference engines, not
         # disk.  Backends can skip the expensive write in that case.
-        persist = request_data.sampling_session_seq_id is None
+        # However, when using external inference we always need the weights
+        # persisted to disk so the external engine can load them.
+        if self.config.external_inference_url is not None:
+            persist = True
+        else:
+            persist = request_data.sampling_session_seq_id is None
 
         with self._checkpoint_status_context(model_id, checkpoint_id, types.CheckpointType.SAMPLER):
             self.backend.save_sampler_checkpoint(output_path, model_id, persist=persist)
